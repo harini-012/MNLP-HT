@@ -1,0 +1,5 @@
+Cybersecurity is the practice of protecting computers, networks and data from
+unauthorized access and attacks. Strong passwords, encryption, firewalls and
+security monitoring can help organizations protect sensitive information.
+Cybersecurity is important because organizations store large amounts of
+personal and financial data on computer systems.

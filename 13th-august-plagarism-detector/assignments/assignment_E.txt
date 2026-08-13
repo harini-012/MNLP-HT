@@ -1,0 +1,5 @@
+Cloud computing provides computing resources through the internet. Users can
+access storage, servers, databases and software without maintaining physical
+hardware. Cloud services can reduce infrastructure costs and provide flexible
+resources. Organizations use cloud computing for data storage, application
+development, backup and business operations.
