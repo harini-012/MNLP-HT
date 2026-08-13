@@ -1,0 +1,6 @@
+Artificial intelligence is a branch of computer science that focuses on
+creating systems capable of performing tasks that normally require human
+intelligence. Machine learning is an important part of artificial intelligence.
+It allows computers to learn patterns from data and make predictions without
+being explicitly programmed. Artificial intelligence is widely used in
+healthcare, banking, education, transportation and customer service.
