@@ -10,27 +10,58 @@ from transformers import (
     TrainingArguments,
     Trainer,
 )
-from sklearn.metrics import accuracy_score, f1_score, classification_report
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    classification_report,
+    confusion_matrix,
+)
 
-# -------------------------------
-# 1. Configuration
-# -------------------------------
+# ==================================================
+# 1. CONFIGURATION
+# ==================================================
 
-MODEL_NAME = "distilbert-base-uncased"
+MODEL_NAME = "bert-base-uncased"
 MODEL_PATH = "saved_model"
+OUTPUT_DIR = "training_results"
+MAX_LENGTH = 128
 
-print("Loading dataset...")
+# Smaller samples make training easier on a normal computer.
+TRAIN_SAMPLES = 1200
+VALIDATION_SAMPLES = 500
+EPOCHS = 1
+BATCH_SIZE = 8
 
-# SST-2 sentiment dataset
+print("=" * 60)
+print("BERT CUSTOMER FEEDBACK SENTIMENT CLASSIFIER")
+print("=" * 60)
+
+print("\nLoading SST-2 sentiment dataset...")
+
+# SST-2 contains sentences labeled as negative (0) or positive (1).
 dataset = load_dataset("glue", "sst2")
 
-# Use smaller samples to make training easier on a normal computer
-train_data = dataset["train"].shuffle(seed=42).select(range(1200))
-validation_data = dataset["validation"].select(range(500))
+train_data = (
+    dataset["train"]
+    .shuffle(seed=42)
+    .select(range(min(TRAIN_SAMPLES, len(dataset["train"]))))
+)
 
-# -------------------------------
-# 2. Tokenization
-# -------------------------------
+validation_data = (
+    dataset["validation"]
+    .select(range(min(VALIDATION_SAMPLES, len(dataset["validation"]))))
+)
+
+print("Training samples:", len(train_data))
+print("Validation samples:", len(validation_data))
+
+# ==================================================
+# 2. LOAD BERT TOKENIZER
+# ==================================================
+
+print("\nLoading BERT tokenizer...")
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
@@ -38,69 +69,87 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 def tokenize_data(examples):
     return tokenizer(
         examples["sentence"],
-        padding="max_length",
         truncation=True,
-        max_length=128,
+        padding="max_length",
+        max_length=MAX_LENGTH,
     )
 
 
-print("Tokenizing dataset...")
-
+print("Tokenizing training data...")
 train_data = train_data.map(tokenize_data, batched=True)
+
+print("Tokenizing validation data...")
 validation_data = validation_data.map(tokenize_data, batched=True)
 
+# Rename the dataset label column for Hugging Face Trainer.
 train_data = train_data.rename_column("label", "labels")
 validation_data = validation_data.rename_column("label", "labels")
 
+# BERT requires input_ids and attention_mask.
 columns = ["input_ids", "attention_mask", "labels"]
 
 train_data.set_format(type="torch", columns=columns)
 validation_data.set_format(type="torch", columns=columns)
 
-# -------------------------------
-# 3. Load DistilBERT
-# -------------------------------
+# ==================================================
+# 3. LOAD BERT CLASSIFICATION MODEL
+# ==================================================
 
-print("Loading DistilBERT model...")
+print("\nLoading BERT sequence classification model...")
 
 model = AutoModelForSequenceClassification.from_pretrained(
     MODEL_NAME,
     num_labels=2,
 )
 
-# -------------------------------
-# 4. Evaluation metrics
-# -------------------------------
+# ==================================================
+# 4. EVALUATION METRICS
+# ==================================================
 
-def compute_metrics(prediction):
-    logits, labels = prediction
-    predictions = np.argmax(logits, axis=-1)
+def compute_metrics(eval_prediction):
+    logits = eval_prediction.predictions
+    labels = eval_prediction.label_ids
+
+    # Some models may return predictions as a tuple.
+    if isinstance(logits, tuple):
+        logits = logits[0]
+
+    predicted_labels = np.argmax(logits, axis=-1)
 
     return {
-        "accuracy": accuracy_score(labels, predictions),
-        "f1": f1_score(labels, predictions),
+        "accuracy": accuracy_score(labels, predicted_labels),
+        "precision": precision_score(
+            labels, predicted_labels, zero_division=0
+        ),
+        "recall": recall_score(
+            labels, predicted_labels, zero_division=0
+        ),
+        "f1": f1_score(
+            labels, predicted_labels, zero_division=0
+        ),
     }
 
 
-# -------------------------------
-# 5. Training configuration
-# -------------------------------
+# ==================================================
+# 5. TRAINING CONFIGURATION
+# ==================================================
 
 training_args = TrainingArguments(
-    output_dir="training_results",
-    num_train_epochs=1,
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=8,
+    output_dir=OUTPUT_DIR,
+    num_train_epochs=EPOCHS,
+    per_device_train_batch_size=BATCH_SIZE,
+    per_device_eval_batch_size=BATCH_SIZE,
     eval_strategy="epoch",
     save_strategy="no",
-    logging_steps=50,
+    logging_steps=25,
     report_to="none",
     use_cpu=not torch.cuda.is_available(),
+    seed=42,
 )
 
-# -------------------------------
-# 6. Train the model
-# -------------------------------
+# ==================================================
+# 6. TRAIN THE MODEL
+# ==================================================
 
 trainer = Trainer(
     model=model,
@@ -110,29 +159,41 @@ trainer = Trainer(
     compute_metrics=compute_metrics,
 )
 
-print("\nStarting model training...")
+print("\nStarting BERT fine-tuning...")
+print("Training may take some time, especially on a CPU.")
+
 trainer.train()
 
-# -------------------------------
-# 7. Evaluate the model
-# -------------------------------
+# ==================================================
+# 7. EVALUATE THE MODEL
+# ==================================================
 
-print("\nEvaluating model...")
+print("\n" + "=" * 60)
+print("MODEL EVALUATION")
+print("=" * 60)
 
-results = trainer.evaluate()
-print("\nEvaluation results:")
-for key, value in results.items():
-    print(f"{key}: {value}")
+evaluation_results = trainer.evaluate()
 
-# -------------------------------
-# 8. Detailed classification report
-# -------------------------------
+for metric, value in evaluation_results.items():
+    if isinstance(value, (int, float)):
+        print(f"{metric}: {value:.4f}")
+    else:
+        print(f"{metric}: {value}")
 
-print("\nGenerating classification report...")
+# ==================================================
+# 8. CLASSIFICATION REPORT AND CONFUSION MATRIX
+# ==================================================
 
-predictions = trainer.predict(validation_data)
-predicted_labels = np.argmax(predictions.predictions, axis=-1)
-true_labels = predictions.label_ids
+print("\nGenerating detailed classification report...")
+
+prediction_output = trainer.predict(validation_data)
+
+logits = prediction_output.predictions
+if isinstance(logits, tuple):
+    logits = logits[0]
+
+predicted_labels = np.argmax(logits, axis=-1)
+true_labels = prediction_output.label_ids
 
 print(
     classification_report(
@@ -144,31 +205,38 @@ print(
     )
 )
 
-# -------------------------------
-# 9. Save trained model
-# -------------------------------
+print("Confusion matrix:")
+print(confusion_matrix(true_labels, predicted_labels, labels=[0, 1]))
 
-print("\nSaving trained model...")
+# ==================================================
+# 9. SAVE MODEL AND TOKENIZER
+# ==================================================
+
+print("\nSaving the trained model...")
 
 os.makedirs(MODEL_PATH, exist_ok=True)
+
 trainer.save_model(MODEL_PATH)
 tokenizer.save_pretrained(MODEL_PATH)
 
-print(f"Model saved successfully in '{MODEL_PATH}'")
+print(f"Model and tokenizer saved to: {os.path.abspath(MODEL_PATH)}")
 
-# -------------------------------
-# 10. Predict custom feedback
-# -------------------------------
+# ==================================================
+# 10. PREDICT CUSTOMER FEEDBACK
+# ==================================================
 
 def predict_sentiment(text):
+    """Return the predicted sentiment and its confidence percentage."""
+
     inputs = tokenizer(
         text,
         return_tensors="pt",
         truncation=True,
         padding=True,
-        max_length=128,
+        max_length=MAX_LENGTH,
     )
 
+    # Move inputs to the same device as the model.
     device = next(model.parameters()).device
     inputs = {key: value.to(device) for key, value in inputs.items()}
 
@@ -177,42 +245,54 @@ def predict_sentiment(text):
     with torch.no_grad():
         outputs = model(**inputs)
         probabilities = torch.softmax(outputs.logits, dim=-1)
-        predicted_class = torch.argmax(probabilities, dim=-1).item()
+
+    predicted_class = torch.argmax(probabilities, dim=-1).item()
 
     sentiment = "Positive" if predicted_class == 1 else "Negative"
-    confidence = probabilities[0][predicted_class].item() * 100
+    confidence = probabilities[0, predicted_class].item() * 100
 
     return sentiment, confidence
 
 
-# -------------------------------
-# 11. Test example feedback
-# -------------------------------
+# ==================================================
+# 11. TEST EXAMPLE FEEDBACK
+# ==================================================
 
-print("\nExample predictions:")
+print("\n" + "=" * 60)
+print("EXAMPLE PREDICTIONS")
+print("=" * 60)
 
 examples = [
     "The product is excellent and works perfectly.",
     "I am very disappointed with this purchase.",
     "The customer service was helpful and friendly.",
     "The quality is terrible and the product broke.",
+    "The experience was okay, nothing special.",
 ]
 
 for feedback in examples:
     sentiment, confidence = predict_sentiment(feedback)
+
     print(f"\nFeedback: {feedback}")
-    print(f"Sentiment: {sentiment}")
+    print(f"Predicted sentiment: {sentiment}")
     print(f"Confidence: {confidence:.2f}%")
 
-# -------------------------------
-# 12. Interactive prediction
-# -------------------------------
+# ==================================================
+# 12. INTERACTIVE PREDICTION
+# ==================================================
 
-print("\nCustomer Feedback Sentiment Classifier")
+print("\n" + "=" * 60)
+print("CUSTOMER FEEDBACK SENTIMENT CLASSIFIER")
+print("Enter feedback to analyze it.")
 print("Type 'exit' to stop.")
+print("=" * 60)
 
 while True:
-    feedback = input("\nEnter customer feedback: ").strip()
+    try:
+        feedback = input("\nEnter customer feedback: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nProgram closed.")
+        break
 
     if feedback.lower() == "exit":
         print("Program closed.")
